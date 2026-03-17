@@ -8,9 +8,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 interface MatchHistoryProps {
   matches: Match[]
   puuid: string
+  rank?: string
 }
 
-export function MatchHistory({ matches, puuid }: MatchHistoryProps) {
+export function MatchHistory({ matches, puuid, rank }: MatchHistoryProps) {
   const [filter, setFilter] = useState<'all' | 'ranked' | 'normal'>('all')
 
   const filteredMatches = matches.filter((match) => {
@@ -40,7 +41,7 @@ export function MatchHistory({ matches, puuid }: MatchHistoryProps) {
           </p>
         ) : (
           filteredMatches.map((match) => (
-            <MatchCard key={match.metadata.matchId} match={match} puuid={puuid} />
+            <MatchCard key={match.metadata.matchId} match={match} puuid={puuid} rank={rank} />
           ))
         )}
       </div>

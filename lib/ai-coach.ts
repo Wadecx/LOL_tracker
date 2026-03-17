@@ -1,9 +1,51 @@
 import Groq from 'groq-sdk'
-import type { PlayerStats, ChampionStats, LeagueEntry, Match } from '@/types/riot'
+import type { PlayerStats, ChampionStats, LeagueEntry, Match, MatchParticipant } from '@/types/riot'
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 })
+
+// Prompt pour l'analyse détaillée d'une game individuelle
+const MATCH_REVIEW_PROMPT = `Tu es un coach LoL expert. Analyse cette partie et donne une review en TEXTE BRUT (pas de markdown, pas de **, pas de #).
+
+MÉTRIQUES DE RÉFÉRENCE PAR RÔLE:
+TOP: CS 7-8/min, Vision 0.8-1/min, KP 50-60%
+JUNGLE: CS 5-6/min, Vision 1-1.2/min, KP 70%+
+MID: CS 8+/min, Vision 0.8-1/min, KP 60-70%
+ADC: CS 8-9/min, Vision 0.6-0.8/min, dégâts top 1-2
+SUPPORT: Vision 1.5-2/min, KP 70%+
+
+FORMAT DE RÉPONSE (texte simple, utilise les emojis comme séparateurs):
+
+[EMOJI VERDICT] VERDICT
+Une phrase résumé de la game.
+
+📊 PERFORMANCE [Note /10]
+Analyse du KDA, farm, vision et impact en 2-3 lignes.
+
+✅ POINTS FORTS
+• Premier point fort
+• Deuxième point fort
+
+⚠️ À AMÉLIORER
+• Premier axe avec conseil
+• Deuxième axe avec conseil
+
+💡 CONSEIL CLÉ
+Un conseil actionnable pour la prochaine game.
+
+🎮 CHAMPIONS RECOMMANDÉS
+• Champion 1 - justification courte
+• Champion 2 - justification courte
+
+RÈGLES STRICTES:
+- PAS de markdown (**, ##, etc.) - UNIQUEMENT du texte brut
+- Utilise • pour les listes, pas de tirets
+- En français, direct et constructif
+- Compare aux autres joueurs de la game
+- Adapte au rang du joueur
+- Emoji verdict: ✅ (bien), ⚠️ (moyen), ❌ (problème), 🔥 (excellent)
+- Maximum 250 mots`
 
 const SYSTEM_PROMPT = `Tu es "LoL Coach AI", un coach d'élite League of Legends avec l'expertise combinée d'analystes pro comme LS, Caedrel et Agurin. Tu as coaché des joueurs du Iron au Challenger et tu connais parfaitement la meta actuelle (Season 14/2024-2025).
 
@@ -256,5 +298,133 @@ export async function analyzePlayer(data: AnalysisData): Promise<string> {
   } catch (error) {
     console.error('Error analyzing player:', error)
     throw new Error('Erreur lors de l\'analyse du joueur')
+  }
+}
+
+// Analyse rapide d'une game individuelle
+export interface MatchAnalysisData {
+  match: Match
+  participant: MatchParticipant
+  rank?: string
+}
+
+function formatMatchForAnalysis(data: MatchAnalysisData): string {
+  const { match, participant, rank } = data
+  const gameDurationMin = match.info.gameDuration / 60
+  const cs = participant.totalMinionsKilled + participant.neutralMinionsKilled
+  const csPerMin = (cs / gameDurationMin).toFixed(1)
+  const kda = participant.deaths === 0
+    ? 'Perfect'
+    : ((participant.kills + participant.assists) / participant.deaths).toFixed(2)
+  const visionPerMin = (participant.visionScore / gameDurationMin).toFixed(2)
+
+  // Stats de l'équipe
+  const team = match.info.teams.find(t => t.teamId === participant.teamId)
+  const enemyTeam = match.info.teams.find(t => t.teamId !== participant.teamId)
+  const allies = match.info.participants.filter(p => p.teamId === participant.teamId)
+  const enemies = match.info.participants.filter(p => p.teamId !== participant.teamId)
+
+  const teamKills = allies.reduce((acc, p) => acc + p.kills, 0)
+  const killParticipation = teamKills > 0
+    ? (((participant.kills + participant.assists) / teamKills) * 100).toFixed(0)
+    : '0'
+
+  // Classements dans la game
+  const allPlayers = match.info.participants
+  const damageRank = allPlayers
+    .sort((a, b) => b.totalDamageDealtToChampions - a.totalDamageDealtToChampions)
+    .findIndex(p => p.puuid === participant.puuid) + 1
+  const goldRank = allPlayers
+    .sort((a, b) => b.goldEarned - a.goldEarned)
+    .findIndex(p => p.puuid === participant.puuid) + 1
+  const visionRank = allPlayers
+    .sort((a, b) => b.visionScore - a.visionScore)
+    .findIndex(p => p.puuid === participant.puuid) + 1
+  const csRank = allPlayers
+    .sort((a, b) => (b.totalMinionsKilled + b.neutralMinionsKilled) - (a.totalMinionsKilled + a.neutralMinionsKilled))
+    .findIndex(p => p.puuid === participant.puuid) + 1
+
+  // Adversaire direct (même rôle)
+  const laneOpponent = enemies.find(p => p.teamPosition === participant.teamPosition)
+  let laneComparison = ''
+  if (laneOpponent) {
+    const oppCs = laneOpponent.totalMinionsKilled + laneOpponent.neutralMinionsKilled
+    const csDiff = cs - oppCs
+    const goldDiff = participant.goldEarned - laneOpponent.goldEarned
+    const kdaDiff = (participant.kills + participant.assists - participant.deaths) -
+                   (laneOpponent.kills + laneOpponent.assists - laneOpponent.deaths)
+    laneComparison = `
+COMPARAISON VS ADVERSAIRE DIRECT (${laneOpponent.championName}):
+- CS: ${csDiff > 0 ? '+' : ''}${csDiff} (${cs} vs ${oppCs})
+- Gold: ${goldDiff > 0 ? '+' : ''}${goldDiff.toLocaleString()}
+- Impact KDA: ${kdaDiff > 0 ? '+' : ''}${kdaDiff}`
+  }
+
+  // Résumé des alliés
+  const alliesSummary = allies
+    .filter(p => p.puuid !== participant.puuid)
+    .map(p => `${p.championName} (${p.teamPosition}): ${p.kills}/${p.deaths}/${p.assists}`)
+    .join(', ')
+
+  return `
+═══════════════════════════════════════
+ANALYSE DÉTAILLÉE DE PARTIE
+═══════════════════════════════════════
+
+CONTEXTE:
+- Résultat: ${participant.win ? '🏆 VICTOIRE' : '💀 DÉFAITE'}
+- Durée: ${gameDurationMin.toFixed(0)} min
+- Rang du joueur: ${rank || 'Non classé'}
+
+JOUEUR ANALYSÉ: ${participant.championName} (${participant.teamPosition || 'Non défini'})
+- KDA: ${participant.kills}/${participant.deaths}/${participant.assists} (ratio: ${kda})
+- CS: ${cs} total (${csPerMin}/min)
+- Vision Score: ${participant.visionScore} (${visionPerMin}/min)
+- Dégâts aux champions: ${participant.totalDamageDealtToChampions.toLocaleString()}
+- Dégâts subis: ${participant.totalDamageTaken.toLocaleString()}
+- Gold: ${participant.goldEarned.toLocaleString()}
+- Kill Participation: ${killParticipation}%
+- Wards posés: ${participant.wardsPlaced} | Wards détruits: ${participant.wardsKilled}
+
+CLASSEMENT DANS LA GAME (sur 10 joueurs):
+- Dégâts: #${damageRank}/10
+- Gold: #${goldRank}/10
+- Vision: #${visionRank}/10
+- CS: #${csRank}/10
+${laneComparison}
+
+ÉQUIPE ALLIÉE:
+${alliesSummary}
+
+OBJECTIFS:
+- Notre équipe - Dragons: ${team?.objectives.dragon.kills || 0} | Barons: ${team?.objectives.baron.kills || 0} | Tours: ${team?.objectives.tower.kills || 0}
+- Équipe adverse - Dragons: ${enemyTeam?.objectives.dragon.kills || 0} | Barons: ${enemyTeam?.objectives.baron.kills || 0} | Tours: ${enemyTeam?.objectives.tower.kills || 0}
+`
+}
+
+export async function analyzeMatch(data: MatchAnalysisData): Promise<string> {
+  const matchData = formatMatchForAnalysis(data)
+
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: MATCH_REVIEW_PROMPT,
+        },
+        {
+          role: 'user',
+          content: `Analyse cette partie en détail:\n${matchData}`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 600,
+    })
+
+    return completion.choices[0]?.message?.content || 'Analyse indisponible.'
+  } catch (error) {
+    console.error('Error analyzing match:', error)
+    throw new Error('Erreur lors de l\'analyse de la partie')
   }
 }

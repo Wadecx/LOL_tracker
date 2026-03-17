@@ -1,6 +1,11 @@
+'use client'
+
+import { useState } from 'react'
 import Image from 'next/image'
 import type { Match, MatchParticipant } from '@/types/riot'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Sparkles, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import {
   formatDuration,
   formatKDA,
@@ -14,9 +19,14 @@ import { cn } from '@/lib/utils'
 interface MatchCardProps {
   match: Match
   puuid: string
+  rank?: string
 }
 
-export function MatchCard({ match, puuid }: MatchCardProps) {
+export function MatchCard({ match, puuid, rank }: MatchCardProps) {
+  const [review, setReview] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(false)
+
   const participant = match.info.participants.find((p) => p.puuid === puuid)
   if (!participant) return null
 
@@ -33,6 +43,34 @@ export function MatchCard({ match, puuid }: MatchCardProps) {
     participant.item5,
     participant.item6,
   ]
+
+  const fetchReview = async () => {
+    if (review) {
+      setIsExpanded(!isExpanded)
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const response = await fetch('/api/ai/analyze-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ match, participant, rank }),
+      })
+
+      if (!response.ok) throw new Error('Erreur API')
+
+      const data = await response.json()
+      setReview(data.analysis)
+      setIsExpanded(true)
+    } catch (error) {
+      console.error('Erreur review:', error)
+      setReview('Impossible de générer la review.')
+      setIsExpanded(true)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   return (
     <Card
@@ -139,11 +177,40 @@ export function MatchCard({ match, puuid }: MatchCardProps) {
           </div>
         </div>
 
-        {/* Timestamp */}
-        <div className="text-right text-xs text-muted-foreground">
-          {getRelativeTime(match.info.gameCreation)}
+        {/* Timestamp + Review Button */}
+        <div className="flex flex-col items-end gap-1">
+          <div className="text-xs text-muted-foreground">
+            {getRelativeTime(match.info.gameCreation)}
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={fetchReview}
+            disabled={isLoading}
+            className="h-7 px-2 text-xs text-gold hover:text-gold-light hover:bg-gold/10"
+          >
+            {isLoading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <>
+                <Sparkles className="h-3 w-3 mr-1" />
+                {review ? (isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />) : 'Review'}
+              </>
+            )}
+          </Button>
         </div>
       </CardContent>
+
+      {/* AI Review Section */}
+      {isExpanded && review && (
+        <div className="px-4 pb-4">
+          <div className="rounded-lg bg-lol-dark/50 border border-gold/20 p-4">
+            <div className="text-sm text-gold-light/90 leading-relaxed whitespace-pre-line">
+              {review}
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   )
 }

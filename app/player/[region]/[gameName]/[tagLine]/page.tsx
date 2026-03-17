@@ -79,7 +79,11 @@ export default async function PlayerPage({ params }: PlayerPageProps) {
       <ChampionStats stats={profile.championStats} />
 
       {/* Match History */}
-      <MatchHistory matches={profile.recentMatches} puuid={profile.account.puuid} />
+      <MatchHistory
+        matches={profile.recentMatches}
+        puuid={profile.account.puuid}
+        rank={profile.rankedSolo ? `${profile.rankedSolo.tier} ${profile.rankedSolo.rank}` : undefined}
+      />
     </div>
   )
 }
